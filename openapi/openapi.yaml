@@ -1,0 +1,547 @@
+openapi: 3.0.3
+info:
+  title: Banking API Assessment
+  description: |
+    Simple retail-banking REST API for the Node.js hiring assessment.
+
+    Implement the handlers so responses match this contract.
+    Core endpoints are required for all candidates.
+    Deposit / withdraw / transfer are stretch goals for mid-senior candidates.
+
+    **Implementation additions (backwards compatible):**
+    - `Idempotency-Key` header on every POST: retries replay the original response
+      (header `Idempotent-Replayed: true`) instead of moving money twice.
+    - `X-Request-Id` on every response, and `requestId` inside error bodies.
+    - `X-Transaction-Id` on money-moving responses → look it up via `GET /transactions/{transactionId}`.
+    - `GET /accounts/{accountId}/transactions`: auditable ledger history.
+    - Business-rule errors use specific `error` codes (e.g. `INSUFFICIENT_FUNDS`,
+      `DAILY_LIMIT_EXCEEDED`, `OUTSIDE_WITHDRAWAL_HOURS`, `ACCOUNT_INACTIVE`, `CURRENCY_MISMATCH`).
+    - Bearer JWT is enforced when the API runs with `AUTH_MODE=jwt` (the AWS deployment).
+  version: 1.1.0
+
+servers:
+  - url: http://localhost:3000
+    description: Local serverless-offline
+
+tags:
+  - name: Customers
+    description: Customer registration and lookup
+  - name: Accounts
+    description: Accounts and balances
+  - name: Transactions
+    description: Deposits, withdrawals, transfers, ledger history and status
+
+# Empty object = anonymous allowed (AUTH_MODE=none, local); bearerAuth enforced when AUTH_MODE=jwt.
+security:
+  - {}
+  - bearerAuth: []
+
+paths:
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Create a customer
+      operationId: createCustomer
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerRequest"
+            example:
+              fullName: Ada Lovelace
+              email: ada@example.com
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /customers/{customerId}:
+    get:
+      tags: [Customers]
+      summary: Get a customer by id
+      operationId: getCustomer
+      parameters:
+        - $ref: "#/components/parameters/customerId"
+      responses:
+        "200":
+          description: Customer found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /customers/{customerId}/accounts:
+    post:
+      tags: [Accounts]
+      summary: Create an account for a customer
+      operationId: createAccount
+      parameters:
+        - $ref: "#/components/parameters/customerId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountRequest"
+            example:
+              type: CHECKING
+              currency: CAD
+              initialBalance: 100.0
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    get:
+      tags: [Accounts]
+      summary: List accounts for a customer
+      operationId: listAccounts
+      parameters:
+        - $ref: "#/components/parameters/customerId"
+      responses:
+        "200":
+          description: Account list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountList"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /accounts/{accountId}:
+    get:
+      tags: [Accounts]
+      summary: Get an account (includes balance)
+      operationId: getAccount
+      parameters:
+        - $ref: "#/components/parameters/accountId"
+      responses:
+        "200":
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /accounts/{accountId}/deposits:
+    post:
+      tags: [Transactions]
+      summary: Deposit funds (stretch)
+      operationId: deposit
+      parameters:
+        - $ref: "#/components/parameters/accountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AmountRequest"
+            example:
+              amount: 50.0
+              currency: CAD
+      responses:
+        "200":
+          description: Deposit applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReused"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /accounts/{accountId}/withdrawals:
+    post:
+      tags: [Transactions]
+      summary: Withdraw funds (stretch)
+      operationId: withdraw
+      parameters:
+        - $ref: "#/components/parameters/accountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AmountRequest"
+            example:
+              amount: 25.0
+              currency: CAD
+      responses:
+        "200":
+          description: Withdrawal applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReused"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /accounts/{accountId}/transactions:
+    get:
+      tags: [Transactions]
+      summary: Account transaction history (ledger), newest first
+      operationId: listTransactions
+      parameters:
+        - $ref: "#/components/parameters/accountId"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: nextToken
+          in: query
+          description: Opaque cursor from the previous page
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of ledger entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /transactions/{transactionId}:
+    get:
+      tags: [Transactions]
+      summary: Transaction status lookup
+      operationId: getTransaction
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema: { type: string }
+          example: txn_6f1c0e8e-1111-4c1f-9b0a-2b3c4d5e6f70
+      responses:
+        "200":
+          description: Transaction found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /transfers:
+    post:
+      tags: [Transactions]
+      summary: Transfer between accounts (stretch)
+      operationId: transfer
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferRequest"
+            example:
+              fromAccountId: acct_001
+              toAccountId: acct_002
+              amount: 10.0
+              currency: CAD
+      responses:
+        "200":
+          description: Transfer completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReused"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Required only when the API runs with AUTH_MODE=jwt (AWS deployment).
+
+  parameters:
+    customerId:
+      name: customerId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: cust_001
+    accountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: acct_001
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Client-generated unique key (8-128 chars, [A-Za-z0-9_-:.]), e.g. a UUID. Retrying with the
+        same key and body returns the original result without applying it again. Reusing it with a
+        different body returns 422. Required for money-moving endpoints when REQUIRE_IDEMPOTENCY_KEY=true.
+      schema:
+        type: string
+      example: 3f0c9a0e-7d4b-4a57-9a0f-1d2b3c4d5e6f
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: |
+        Business rule conflict: INSUFFICIENT_FUNDS, DAILY_LIMIT_EXCEEDED, OUTSIDE_WITHDRAWAL_HOURS,
+        ACCOUNT_INACTIVE, CUSTOMER_INACTIVE, or CONCURRENT_UPDATE (retryable, has Retry-After).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    IdempotencyKeyReused:
+      description: The Idempotency-Key was already used with a different request body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: Rate limit exceeded (see Retry-After header)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    CreateCustomerRequest:
+      type: object
+      required: [fullName, email]
+      properties:
+        fullName:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          format: email
+
+    Customer:
+      type: object
+      required: [customerId, fullName, email, status, createdAt]
+      properties:
+        customerId:
+          type: string
+        fullName:
+          type: string
+        email:
+          type: string
+          format: email
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateAccountRequest:
+      type: object
+      required: [type, currency]
+      properties:
+        type:
+          type: string
+          enum: [CHECKING, SAVINGS]
+        currency:
+          type: string
+          enum: [CAD, USD]
+        initialBalance:
+          type: number
+          minimum: 0
+          default: 0
+
+    Account:
+      type: object
+      required:
+        - accountId
+        - customerId
+        - type
+        - currency
+        - balance
+        - status
+        - createdAt
+      properties:
+        accountId:
+          type: string
+        customerId:
+          type: string
+        type:
+          type: string
+          enum: [CHECKING, SAVINGS]
+        currency:
+          type: string
+          enum: [CAD, USD]
+        balance:
+          type: number
+        status:
+          type: string
+          enum: [OPEN, CLOSED]
+        createdAt:
+          type: string
+          format: date-time
+
+    AccountList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Account"
+
+    AmountRequest:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+        currency:
+          type: string
+          enum: [CAD, USD]
+
+    TransferRequest:
+      type: object
+      required: [fromAccountId, toAccountId, amount, currency]
+      properties:
+        fromAccountId:
+          type: string
+        toAccountId:
+          type: string
+        amount:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+        currency:
+          type: string
+          enum: [CAD, USD]
+
+    TransferResult:
+      type: object
+      required: [fromAccount, toAccount]
+      properties:
+        fromAccount:
+          $ref: "#/components/schemas/Account"
+        toAccount:
+          $ref: "#/components/schemas/Account"
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: BAD_REQUEST
+        message:
+          type: string
+          example: email is required
+        requestId:
+          type: string
+          description: Correlation id (also in the X-Request-Id header). Quote it to support.
+
+    LedgerEntry:
+      type: object
+      required: [transactionId, type, direction, amount, currency, balanceAfter, status, createdAt]
+      properties:
+        transactionId: { type: string }
+        type: { type: string, enum: [ACCOUNT_OPENING, DEPOSIT, WITHDRAWAL, TRANSFER] }
+        direction: { type: string, enum: [CREDIT, DEBIT] }
+        amount: { type: number }
+        currency: { type: string, enum: [CAD, USD] }
+        balanceAfter: { type: number }
+        status: { type: string, enum: [COMPLETED] }
+        counterpartyAccountId: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    LedgerPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntry"
+        nextToken:
+          type: string
+          description: Present when more pages exist
+
+    Transaction:
+      type: object
+      required: [transactionId, type, status, amount, currency, createdAt, entries]
+      properties:
+        transactionId: { type: string }
+        type: { type: string, enum: [ACCOUNT_OPENING, DEPOSIT, WITHDRAWAL, TRANSFER] }
+        status: { type: string, enum: [COMPLETED] }
+        amount: { type: number }
+        currency: { type: string, enum: [CAD, USD] }
+        createdAt: { type: string, format: date-time }
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              accountId: { type: string }
+              direction: { type: string, enum: [CREDIT, DEBIT] }
+              balanceAfter:
+                type: number
+                description: Omitted for legs on accounts the caller does not own

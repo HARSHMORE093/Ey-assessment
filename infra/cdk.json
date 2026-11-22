@@ -1,0 +1,15 @@
+{
+  "app": "node bin/app.js",
+  "context": {
+    "stage": "dev",
+    "provisionedConcurrency": 0,
+    "reservedConcurrency": 0,
+    "bankTimezone": "America/Toronto",
+    "withdrawalWindowStart": "10:00",
+    "withdrawalWindowEnd": "17:00",
+    "dailyWithdrawalLimitMinor": 500000,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:stackRelativeExports": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true
+  }
+}

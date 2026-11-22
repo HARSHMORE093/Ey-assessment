@@ -1,0 +1,139 @@
+service: banking-api-assessment
+
+frameworkVersion: "3"
+
+# Load .env into ${env:...} variables (local development only).
+useDotenv: true
+
+# NOTE: this file drives LOCAL emulation (serverless-offline) only.
+# The real AWS deployment is defined with AWS CDK in infra/ (least-privilege IAM per function,
+# KMS, PITR, WAF, throttling, alarms, provisioned concurrency …).
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  stage: local
+  region: ${env:AWS_REGION, 'us-east-1'}
+  environment:
+    DYNAMODB_ENDPOINT: ${env:DYNAMODB_ENDPOINT, 'http://localhost:8000'}
+    CUSTOMERS_TABLE: ${env:CUSTOMERS_TABLE, 'Customers'}
+    ACCOUNTS_TABLE: ${env:ACCOUNTS_TABLE, 'Accounts'}
+    TRANSACTIONS_TABLE: ${env:TRANSACTIONS_TABLE, 'Transactions'}
+    IDEMPOTENCY_TABLE: ${env:IDEMPOTENCY_TABLE, 'IdempotencyKeys'}
+    BANK_TIMEZONE: ${env:BANK_TIMEZONE, 'America/Toronto'}
+    WITHDRAWAL_WINDOW_START: ${env:WITHDRAWAL_WINDOW_START, '00:00'}
+    WITHDRAWAL_WINDOW_END: ${env:WITHDRAWAL_WINDOW_END, '24:00'}
+    DAILY_WITHDRAWAL_LIMIT_MINOR: ${env:DAILY_WITHDRAWAL_LIMIT_MINOR, '500000'}
+    REQUIRE_IDEMPOTENCY_KEY: ${env:REQUIRE_IDEMPOTENCY_KEY, 'false'}
+    RATE_LIMIT_ENABLED: ${env:RATE_LIMIT_ENABLED, 'true'}
+    RATE_LIMIT_BURST: ${env:RATE_LIMIT_BURST, '100'}
+    RATE_LIMIT_RPS: ${env:RATE_LIMIT_RPS, '50'}
+    AUTH_MODE: ${env:AUTH_MODE, 'none'}
+    JWT_SECRET: ${env:JWT_SECRET, ''}
+    LOG_LEVEL: ${env:LOG_LEVEL, 'info'}
+  # IAM is unused for local DynamoDB; the deployable least-privilege policies live in infra/.
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:ConditionCheckItem
+            - dynamodb:Query
+          Resource: "*"
+
+plugins:
+  - serverless-offline
+
+custom:
+  serverless-offline:
+    httpPort: 3000
+    noPrependStageInUrl: true
+
+functions:
+  docsUi:
+    handler: src/handlers/docs.ui
+    events:
+      - http:
+          path: docs
+          method: get
+
+  openapiSpec:
+    handler: src/handlers/docs.openapi
+    events:
+      - http:
+          path: openapi.yaml
+          method: get
+
+  createCustomer:
+    handler: src/handlers/customers.create
+    events:
+      - http:
+          path: customers
+          method: post
+
+  getCustomer:
+    handler: src/handlers/customers.get
+    events:
+      - http:
+          path: customers/{customerId}
+          method: get
+
+  createAccount:
+    handler: src/handlers/accounts.create
+    events:
+      - http:
+          path: customers/{customerId}/accounts
+          method: post
+
+  listAccounts:
+    handler: src/handlers/accounts.list
+    events:
+      - http:
+          path: customers/{customerId}/accounts
+          method: get
+
+  getAccount:
+    handler: src/handlers/accounts.get
+    events:
+      - http:
+          path: accounts/{accountId}
+          method: get
+
+  deposit:
+    handler: src/handlers/transactions.deposit
+    events:
+      - http:
+          path: accounts/{accountId}/deposits
+          method: post
+
+  withdraw:
+    handler: src/handlers/transactions.withdraw
+    events:
+      - http:
+          path: accounts/{accountId}/withdrawals
+          method: post
+
+  transfer:
+    handler: src/handlers/transactions.transfer
+    events:
+      - http:
+          path: transfers
+          method: post
+
+  # Additions beyond the template: transaction history and status
+  accountTransactions:
+    handler: src/handlers/transactions.history
+    events:
+      - http:
+          path: accounts/{accountId}/transactions
+          method: get
+
+  getTransaction:
+    handler: src/handlers/transactions.status
+    events:
+      - http:
+          path: transactions/{transactionId}
+          method: get
